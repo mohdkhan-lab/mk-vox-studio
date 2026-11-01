@@ -42,6 +42,22 @@ tools_dir = os.path.join(ROOT_DIR, "tools")
 if os.path.isdir(tools_dir) and tools_dir not in os.environ.get("PATH", ""):
     os.environ["PATH"] = tools_dir + os.pathsep + os.environ.get("PATH", "")
 
+# v1.0.1: never fail silently. Under pythonw (no console) sys.stdout/stderr
+# can be unusable, so every print in this launcher vanished and a failed
+# start looked like "nothing happened". If either stream is missing, send
+# both to startup-log.txt beside this script so the error can be read.
+_LOG_FH = None
+if sys.stdout is None or sys.stderr is None:
+    try:
+        _LOG_FH = open(os.path.join(ROOT_DIR, "startup-log.txt"), "a",
+                       buffering=1, encoding="utf-8", errors="replace")
+        if sys.stdout is None:
+            sys.stdout = _LOG_FH
+        if sys.stderr is None:
+            sys.stderr = _LOG_FH
+    except Exception:
+        pass
+
 
 def is_port_busy(port: int, host: str = "127.0.0.1") -> bool:
     """Check if a port is in use on localhost."""
@@ -214,7 +230,10 @@ def main():
             print(f"[ERROR] Server port {port} par samay par start nahi hua.")
             if server_proc:
                 server_proc.terminate()
-            input("\nPress Enter to exit...")
+            try:
+                input("\nPress Enter to exit...")
+            except Exception:
+                pass
             return 1
 
         print(f"[OK] Server successfully started and verified on {app_url}!")
@@ -287,4 +306,17 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception:
+        # v1.0.1: a launcher crash must leave a readable trace, not silence.
+        import traceback
+        traceback.print_exc()
+        try:
+            with open(os.path.join(ROOT_DIR, "startup-log.txt"), "a",
+                      encoding="utf-8", errors="replace") as _f:
+                _f.write("\n[LAUNCHER CRASH]\n")
+                traceback.print_exc(file=_f)
+        except Exception:
+            pass
+        sys.exit(1)
