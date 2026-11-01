@@ -41,6 +41,13 @@ from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import urllib.parse
 
+# Portable runtimes (embedded Python with a ._pth file) start with an
+# isolated sys.path: this script's own folder is NOT added and PYTHONPATH
+# is ignored, so the first local import below died with
+# "ModuleNotFoundError: No module named 'env'". Put this folder back
+# explicitly — dash.py has always done the same.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import env                       # redirects the project root; must come first
 from env import AI_PIPE, CLIP_SECONDS, CREDITS_PER_CLIP
 from common import probe
