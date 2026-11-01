@@ -302,6 +302,12 @@ def _provider_voice(tts, engine, wanted):
         names = {v["id"]: v["name"] for v in voices}
         if raw in names:
             return raw, names[raw]
+        if engine == "fish" and raw:
+            # Fish speaks with reference ids — the buyer's own cloned
+            # models — which no catalogue lists. An id the picker (or
+            # the project) names is used as-is, never swapped for the
+            # default voice.
+            return raw, raw
         vid = tts.default_voice(engine)
         return vid, names.get(vid, vid)
     # Providers whose voice ids are opaque (ElevenLabs, Cartesia,

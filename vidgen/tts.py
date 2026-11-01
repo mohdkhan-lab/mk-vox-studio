@@ -26,6 +26,7 @@ import hashlib
 import hmac
 import json
 import os
+import sys
 import time
 
 import requests
@@ -405,6 +406,75 @@ _FISH_VOICES = [
     ("default", "Default (Fish ki apni awaaz)"),
 ]
 
+# Standard named voices for the providers whose full catalogues live
+# behind an API key. These are the providers' own published voice
+# names/ids, so the narrator picker can offer them before any key is
+# pasted — and when a key IS saved, list_voices() replaces them with
+# the account's live list. (Cartesia has no such public stable ids —
+# its voices are listed live once a key is saved.)
+_GOOGLE_VOICES = [
+    ("hi-IN-Neural2-A", "Neural2 A (Hindi, Female)"),
+    ("hi-IN-Neural2-B", "Neural2 B (Hindi, Male)"),
+    ("hi-IN-Neural2-C", "Neural2 C (Hindi, Female)"),
+    ("hi-IN-Neural2-D", "Neural2 D (Hindi, Male)"),
+    ("hi-IN-Wavenet-A", "Wavenet A (Hindi, Female)"),
+    ("hi-IN-Wavenet-B", "Wavenet B (Hindi, Male)"),
+    ("hi-IN-Wavenet-C", "Wavenet C (Hindi, Male)"),
+    ("en-IN-Neural2-A", "Neural2 A (Indian English, Female)"),
+    ("en-IN-Neural2-B", "Neural2 B (Indian English, Male)"),
+    ("en-US-Neural2-A", "Neural2 A (US English, Male)"),
+    ("en-US-Neural2-C", "Neural2 C (US English, Female)"),
+    ("en-US-Neural2-D", "Neural2 D (US English, Male)"),
+    ("en-US-Neural2-E", "Neural2 E (US English, Female)"),
+    ("en-US-Neural2-F", "Neural2 F (US English, Female)"),
+    ("en-US-Neural2-J", "Neural2 J (US English, Male)"),
+    ("en-US-Studio-O", "Studio O (US English, Female)"),
+    ("en-US-Studio-Q", "Studio Q (US English, Male)"),
+    ("en-GB-Neural2-A", "Neural2 A (UK English, Female)"),
+    ("en-GB-Neural2-B", "Neural2 B (UK English, Male)"),
+]
+
+_AZURE_VOICES = [
+    ("hi-IN-SwaraNeural", "Swara (Hindi, Female)"),
+    ("hi-IN-MadhurNeural", "Madhur (Hindi, Male)"),
+    ("en-IN-NeerjaNeural", "Neerja (Indian English, Female)"),
+    ("en-IN-PrabhatNeural", "Prabhat (Indian English, Male)"),
+    ("en-US-JennyNeural", "Jenny (US English, Female)"),
+    ("en-US-GuyNeural", "Guy (US English, Male)"),
+    ("en-US-AriaNeural", "Aria (US English, Female)"),
+    ("en-US-DavisNeural", "Davis (US English, Male)"),
+    ("en-US-AmberNeural", "Amber (US English, Female)"),
+    ("en-US-ChristopherNeural", "Christopher (US English, Male)"),
+    ("en-GB-SoniaNeural", "Sonia (UK English, Female)"),
+    ("en-GB-RyanNeural", "Ryan (UK English, Male)"),
+]
+
+# ElevenLabs' own premade voices (the set every account starts with).
+_ELEVENLABS_VOICES = [
+    ("21m00Tcm4TlvDq8ikWAM", "Rachel (Female, calm narration)"),
+    ("pNInz6obpgDQGcFmaJgB", "Adam (Male, deep narration)"),
+    ("ErXwobaYiN019PkySvjV", "Antoni (Male, well-rounded)"),
+    ("VR6AewLTigWG4xSOukaG", "Arnold (Male, crisp)"),
+    ("EXAVITQu4vr4xnSDxMaL", "Bella (Female, soft)"),
+    ("AZnzlk1XvdvUeBnXmlld", "Domi (Female, strong)"),
+    ("MF3mGyEYCl7XYWbV9V6O", "Elli (Female, young)"),
+    ("TxGEqnHWrfWFTfGW9XjX", "Josh (Male, young)"),
+    ("yoZ06aMxZJJ28mfd3POQ", "Sam (Male, dry)"),
+    ("LcfcDJNUP1GQjkzn1xUU", "Emily (Female, calm)"),
+    ("oWAxZDx7w5VEj9dCyTzz", "Grace (Female, soft)"),
+    ("onwK4e9ZLuTAKqWW03F9", "Daniel (Male, authoritative)"),
+    ("pFZP5JQG7iQjIQuC4Bku", "Lily (Female, warm)"),
+    ("XB0fDUnXU5powFXDhCwa", "Charlotte (Female, seductive-neutral)"),
+    ("XrExE9yKIg1WjnnlVkGX", "Matilda (Female, warm narration)"),
+    ("JBFqnCBsd6RMkjVDRZzb", "George (Male, warm storyteller)"),
+    ("N2lVS1w4EtoT3dr4eOWO", "Callum (Male, intense)"),
+    ("Xb7hH8MSUJpSbSDYk0k2", "Alice (Female, clear)"),
+    ("pqHfZKP75CvOlQylNhV4", "Bill (Male, older)"),
+    ("nPczCjzI2devNBz1zQrb", "Brian (Male, deep)"),
+    ("iP95p4xoKVk53GoZ742B", "Chris (Male, casual)"),
+    ("cgSgspJ2msm6clMCkdW9", "Jessica (Female, expressive)"),
+]
+
 _KOKORO_VOICES = [
     ("af_heart", "Heart (US English, Female)"),
     ("af_bella", "Bella (US English, Female)"),
@@ -437,19 +507,29 @@ def list_voices(provider):
     if provider == "fish":
         return {"ok": True, "voices": _rows(_FISH_VOICES)}
     if provider == "elevenlabs":
-        key = _need_key(provider)
-        r = requests.get("https://api.elevenlabs.io/v1/voices",
-                         headers={"xi-api-key": key}, timeout=TIMEOUT)
-        if r.status_code != 200:
-            raise _err(r)
-        out = []
-        for v in r.json().get("voices", []):
-            labels = v.get("labels") or {}
-            meta = ", ".join(str(x) for x in labels.values() if x)
-            out.append({"id": v.get("voice_id"),
-                        "name": v.get("name") or v.get("voice_id"),
-                        "meta": meta})
-        return {"ok": True, "voices": out}
+        if not get_key(provider):
+            return {"ok": True, "voices": _rows(_ELEVENLABS_VOICES),
+                    "static": True}
+        try:
+            r = requests.get("https://api.elevenlabs.io/v1/voices",
+                             headers={"xi-api-key": get_key(provider)},
+                             timeout=TIMEOUT)
+            if r.status_code != 200:
+                raise _err(r)
+            out = []
+            for v in r.json().get("voices", []):
+                labels = v.get("labels") or {}
+                meta = ", ".join(str(x) for x in labels.values() if x)
+                out.append({"id": v.get("voice_id"),
+                            "name": v.get("name") or v.get("voice_id"),
+                            "meta": meta})
+            return {"ok": True, "voices": out}
+        except Exception:
+            # The picker must never go empty because the account call
+            # failed — the standard voices still generate (and the
+            # generate call itself will report a bad key plainly).
+            return {"ok": True, "voices": _rows(_ELEVENLABS_VOICES),
+                    "static": True}
     if provider == "cartesia":
         key = _need_key(provider)
         r = requests.get("https://api.cartesia.ai/voices",
@@ -465,43 +545,181 @@ def list_voices(provider):
                for v in items if v.get("id")]
         return {"ok": True, "voices": out}
     if provider == "google":
-        key = _need_key(provider)
-        r = requests.get("https://texttospeech.googleapis.com/v1/voices",
-                         params={"key": key}, timeout=TIMEOUT)
-        if r.status_code != 200:
-            raise _err(r)
-        out = []
-        for v in r.json().get("voices", []):
-            name = v.get("name") or ""
-            lang = (v.get("languageCodes") or [""])[0]
-            if lang.startswith(("en", "hi")):
-                out.append({"id": name, "name": name, "meta": lang})
-            if len(out) >= 80:
-                break
-        return {"ok": True, "voices": out}
+        if not get_key(provider):
+            return {"ok": True, "voices": _rows(_GOOGLE_VOICES),
+                    "static": True}
+        try:
+            r = requests.get("https://texttospeech.googleapis.com/v1/voices",
+                             params={"key": get_key(provider)},
+                             timeout=TIMEOUT)
+            if r.status_code != 200:
+                raise _err(r)
+            out = []
+            for v in r.json().get("voices", []):
+                name = v.get("name") or ""
+                lang = (v.get("languageCodes") or [""])[0]
+                if lang.startswith(("en", "hi")):
+                    out.append({"id": name, "name": name, "meta": lang})
+                if len(out) >= 80:
+                    break
+            return {"ok": True, "voices": out}
+        except Exception:
+            return {"ok": True, "voices": _rows(_GOOGLE_VOICES),
+                    "static": True}
     if provider == "azure":
-        key = _need_key(provider)
         region = (get_entry(provider).get("region") or "").strip()
-        if not region:
-            raise RuntimeError("Azure ke liye region bhi dalo (jaise eastus) "
-                               "- key ke saath wahi box me save hota hai.")
-        r = requests.get(
-            "https://%s.tts.speech.microsoft.com/cognitiveservices/voices/list"
-            % region,
-            headers={"Ocp-Apim-Subscription-Key": key}, timeout=TIMEOUT)
-        if r.status_code != 200:
-            raise _err(r)
-        out = []
-        for v in r.json():
-            locale = v.get("Locale") or ""
-            if locale.startswith(("en", "hi")):
-                out.append({"id": v.get("ShortName"),
-                            "name": v.get("DisplayName") or v.get("ShortName"),
-                            "meta": locale})
-            if len(out) >= 80:
-                break
-        return {"ok": True, "voices": out}
+        if not get_key(provider) or not region:
+            return {"ok": True, "voices": _rows(_AZURE_VOICES),
+                    "static": True}
+        try:
+            r = requests.get(
+                "https://%s.tts.speech.microsoft.com/cognitiveservices/voices/list"
+                % region,
+                headers={"Ocp-Apim-Subscription-Key": get_key(provider)},
+                timeout=TIMEOUT)
+            if r.status_code != 200:
+                raise _err(r)
+            out = []
+            for v in r.json():
+                locale = v.get("Locale") or ""
+                if locale.startswith(("en", "hi")):
+                    out.append({"id": v.get("ShortName"),
+                                "name": v.get("DisplayName") or v.get("ShortName"),
+                                "meta": locale})
+                if len(out) >= 80:
+                    break
+            return {"ok": True, "voices": out}
+        except Exception:
+            return {"ok": True, "voices": _rows(_AZURE_VOICES),
+                    "static": True}
     raise RuntimeError("unknown provider")
+
+
+# ------------------------------------------------------- unified catalogue
+#
+# One list of every voice the app can speak with, whichever engine owns
+# it. The project page's narrator picker is fed from this (through the
+# dashboard), so a voice picked there carries its provider with it:
+# selections are stored as a single string — the plain voice id for
+# AI33 (the historical form, so old projects keep working) and
+# "tts:<provider>:<voice_id>" for every other provider. parse_selection
+# is the one place that reads that string back.
+
+TOKEN_PREFIX = "tts:"
+
+
+def selection_token(provider, voice_id):
+    """The stored form of one picker selection."""
+    if provider == "ai33":
+        return voice_id
+    return "%s%s:%s" % (TOKEN_PREFIX, provider, voice_id)
+
+
+def parse_selection(value):
+    """(provider, voice_id) for a stored selection; plain ids are AI33."""
+    raw = (value or "").strip()
+    if raw.startswith(TOKEN_PREFIX):
+        prov, _, vid = raw[len(TOKEN_PREFIX):].partition(":")
+        if prov and vid:
+            return prov, vid
+    return "ai33", raw
+
+
+def _lang_of(provider, voice_id, name=""):
+    """The picker's language bucket for one voice: hindi / english / ''."""
+    vid = (voice_id or "").lower()
+    if provider == "sarvam":
+        return "hindi"
+    if provider == "kokoro":
+        return "hindi" if vid.startswith(("hf_", "hm_")) else "english"
+    if provider == "polly":
+        return "hindi" if voice_id == "Kajal" else "english"
+    if vid.startswith("hi-") or "hindi" in vid:
+        return "hindi"
+    if vid.startswith("en-") or vid.startswith("en_"):
+        return "english"
+    if provider in ("openai", "deepgram"):
+        return "english"
+    return ""
+
+
+def _ai33_narrators():
+    """AI33's built-in narrator shortcuts, imported by file location.
+
+    make_voiceover.py sits in ai_avatar_pipeline/ next to vidgen/; the
+    bundled Python's isolated sys.path cannot be trusted to contain it
+    (PYTHONPATH is ignored there), so the folder is added from __file__.
+    """
+    try:
+        pipe = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "ai_avatar_pipeline")
+        if os.path.isdir(pipe) and pipe not in sys.path:
+            sys.path.insert(0, pipe)
+        from make_voiceover import AI33_NARRATORS
+        return AI33_NARRATORS
+    except Exception:
+        return {}
+
+
+def list_all_voices():
+    """Every voice in the app, one row each:
+    {provider, voice_id, name, lang, desc, needs_key[, clone]}.
+
+    Offline-safe: built-in/static catalogues always answer; a provider
+    with a saved key contributes its live list instead, and any failure
+    quietly falls back to the static rows (or nothing). AI33's dynamic
+    libraries (its ElevenLabs/Minimax/clone listings) stay with the
+    dashboard's own fetcher — here AI33 contributes its built-in
+    narrators and this app's cloned voices.
+    """
+    out = []
+    seen = set()
+
+    def add(provider, voice_id, name, lang, desc, needs_key, clone=False):
+        if not voice_id or (provider, voice_id) in seen:
+            return
+        seen.add((provider, voice_id))
+        row = {"provider": provider, "voice_id": voice_id,
+               "name": name, "lang": lang, "desc": desc,
+               "needs_key": bool(needs_key)}
+        if clone:
+            row["clone"] = True
+        out.append(row)
+
+    # AI33 built-in narrators.
+    for shortcut, (vid, desc) in _ai33_narrators().items():
+        lang = "hindi" if "hindi" in desc.lower() else "english"
+        add("ai33", vid, shortcut.title(), lang, desc, True)
+
+    # Voices cloned in this app (AI33 today; ElevenLabs/Fish join here
+    # too — the registry remembers which provider owns each clone).
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import voiceclone
+        for v in voiceclone.my_clones():
+            prov = v.get("provider") or "ai33"
+            add(prov, v["id"], v.get("name") or v["id"], "clone",
+                "Your cloned voice", PROVIDERS.get(prov, {}).get(
+                    "needs_key", True), clone=True)
+    except Exception:
+        pass
+
+    # Every other provider, static catalogue first-class.
+    for prov in ("edge", "sarvam", "google", "azure", "polly", "openai",
+                 "elevenlabs", "cartesia", "deepgram", "fish", "kokoro"):
+        try:
+            rows = list_voices(prov)["voices"]
+        except Exception:
+            continue            # e.g. Cartesia before a key is saved
+        meta = PROVIDERS[prov]
+        for v in rows:
+            add(prov, v["id"], v["name"],
+                _lang_of(prov, v["id"], v["name"]),
+                v.get("meta") or "", meta["needs_key"])
+    return out
 
 
 # -------------------------------------------------------------------- quota

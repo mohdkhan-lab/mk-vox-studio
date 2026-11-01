@@ -980,6 +980,26 @@ def get_batch_status():
 
 _VOICES = {"at": 0.0, "names": []}
 
+# Picker groups for the non-AI33 providers in the unified catalogue.
+_PICKER_GROUPS = {
+    "edge": "🆓 Edge TTS (Free)",
+    "sarvam": "🎙️ Sarvam Voices",
+    "google": "🎙️ Google Voices",
+    "azure": "🎙️ Azure Voices",
+    "polly": "🎙️ Amazon Polly Voices",
+    "openai": "🎙️ OpenAI Voices",
+    "elevenlabs": "🎙️ ElevenLabs (Direct Key)",
+    "cartesia": "🎙️ Cartesia Voices",
+    "deepgram": "🎙️ Deepgram Voices",
+    "fish": "🎙️ Fish Audio Voices",
+    "kokoro": "🎙️ Kokoro (Local) Voices",
+}
+
+
+def _clone_picker_id(prov, vid):
+    """The narrator picker's value for one cloned voice."""
+    return vid if prov == "ai33" else "tts:%s:%s" % (prov, vid)
+
 
 def voices_available():
     """All 100+ voices available on AI33 Pro, cached for ten minutes.
@@ -1004,10 +1024,12 @@ def voices_available():
         for name, (vid, desc) in AI33_NARRATORS.items():
             if "hindi" in desc.lower():
                 out.append({"name": f"{name.title()} — {desc}", "id": vid,
-                            "group": "🇮🇳 Hindi Narrators", "lang": "hindi"})
+                            "group": "🇮🇳 Hindi Narrators", "lang": "hindi",
+                            "provider": "ai33"})
             else:
                 out.append({"name": f"{name.title()} — {desc}", "id": vid,
-                            "group": "🇬🇧 English Narrators", "lang": "english"})
+                            "group": "🇬🇧 English Narrators", "lang": "english",
+                            "provider": "ai33"})
     except Exception:
         pass
 
@@ -1031,6 +1053,7 @@ def voices_available():
                     if v_n and v_id:
                         out.append({"name": f"🎙️ {v_n}", "id": v_id,
                                     "group": "🎙️ Your Cloned Voices", "lang": "clone",
+                                    "provider": "ai33",
                                     "preview": v.get("preview_url") or ""})
         except Exception:
             pass
@@ -1049,6 +1072,7 @@ def voices_available():
                     if v_id:
                         out.append({"name": label, "id": v_id,
                                     "group": "🌍 ElevenLabs Voices", "lang": "elevenlabs",
+                                    "provider": "ai33",
                                     "preview": v.get("preview_url") or ""})
         except Exception:
             pass
@@ -1067,6 +1091,7 @@ def voices_available():
                     if v_id:
                         out.append({"name": label, "id": v_id,
                                     "group": "🎭 Minimax Voices", "lang": "minimax",
+                                    "provider": "ai33",
                                     "preview": v.get("preview_url") or ""})
         except Exception:
             pass
@@ -1076,9 +1101,20 @@ def voices_available():
         try:
             import voiceclone
             have = {v["id"] for v in out}
-            mine = [{"name": f"🎙️ {v['name']}", "id": v["id"], "group": "🎙️ Your Cloned Voices",
-                     "lang": "clone", "preview": ""}
-                    for v in voiceclone.my_clones() if v["id"] not in have]
+            mine = []
+            for v in voiceclone.my_clones():
+                prov = v.get("provider") or "ai33"
+                pid_ = _clone_picker_id(prov, v["id"])
+                if pid_ in have or v["id"] in have:
+                    continue
+                label = f"🎙️ {v['name']}"
+                if prov != "ai33":
+                    label += " · " + tts.PROVIDERS.get(
+                        prov, {}).get("name", prov)
+                mine.append({"name": label, "id": pid_,
+                             "group": "🎙️ Your Cloned Voices",
+                             "lang": "clone", "provider": prov,
+                             "preview": ""})
             out = mine + out
         except Exception:
             pass
@@ -1086,12 +1122,58 @@ def voices_available():
         # D) The buyer's starred voices, first in the list.
         try:
             favs = [{"name": "⭐ " + r["name"], "id": r["id"], "group": "⭐ Favourites",
-                     "lang": "favorite", "preview": r["preview"]}
+                     "lang": "favorite", "preview": r["preview"],
+                     "provider": "ai33"}
                     for r in _favorite_ids().values()
                     if not voice_locked(r["provider"], r["id"])]
             out = favs + out
         except Exception:
             pass
+
+    # Voices cloned in this app, key or no key: the local registry is
+    # the truth (the block above only runs when an AI33 key is saved).
+    try:
+        import voiceclone
+        have = {v["id"] for v in out}
+        mine = []
+        for v in voiceclone.my_clones():
+            prov = v.get("provider") or "ai33"
+            pid_ = _clone_picker_id(prov, v["id"])
+            if pid_ in have or v["id"] in have:
+                continue
+            label = f"🎙️ {v['name']}"
+            if prov != "ai33":
+                label += " · " + tts.PROVIDERS.get(
+                    prov, {}).get("name", prov)
+            mine.append({"name": label, "id": pid_,
+                         "group": "🎙️ Your Cloned Voices",
+                         "lang": "clone", "provider": prov, "preview": ""})
+        out = mine + out
+    except Exception:
+        pass
+
+    # Every other provider's voices — Edge (free, no key), Sarvam,
+    # Google, Azure, Polly, OpenAI, direct ElevenLabs, Cartesia,
+    # Deepgram, Fish, Kokoro — from the one unified catalogue in
+    # tts.py. Each row's id carries its provider ("tts:<provider>:<id>"),
+    # so the pick made here routes generation to that provider later.
+    try:
+        for r in tts.list_all_voices():
+            if r["provider"] == "ai33" or r.get("clone"):
+                continue
+            prov = r["provider"]
+            pname = tts.PROVIDERS.get(prov, {}).get("name", prov)
+            label = r["name"]
+            if r["desc"]:
+                label += " — " + r["desc"]
+            label += " · " + pname
+            out.append({"name": label,
+                        "id": tts.selection_token(prov, r["voice_id"]),
+                        "group": _PICKER_GROUPS.get(
+                            prov, "🎙️ " + pname + " Voices"),
+                        "lang": r["lang"], "provider": prov, "preview": ""})
+    except Exception:
+        pass
 
     if out:
         _VOICES.update(at=time.time(), names=out)
@@ -1190,6 +1272,8 @@ _SAMPLES = {}
 def voice_sample_url(voice_id):
     """The sample of any voice by its id: the built-in narrators carry none in
     the dropdown, and AI33 finds a voice when searched by its own id."""
+    if str(voice_id).startswith("tts:"):
+        return ""        # a direct-provider voice: no AI33 sample exists
     if voice_id in _SAMPLES:
         return _SAMPLES[voice_id]
     for v in _VOICES.get("names") or []:
@@ -1305,6 +1389,13 @@ LENGTH_MIN, LENGTH_MAX = 0.75, 1.3   # chosen length vs the natural one (1.2 x 1
 
 def voice_pace(voice):
     """(words per minute at speed 1.0, how many films it was learned from)."""
+    # A unified-picker selection ("tts:edge:...") is learned under the
+    # plain voice id the finished film's state file records.
+    try:
+        if voice:
+            voice = tts.parse_selection(voice)[1]
+    except Exception:
+        pass
     rates = []
     try:
         names = os.listdir(PROJECTS)
@@ -2411,6 +2502,15 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self._json({"ok": False, "error": str(e)[:300]})
 
+        if path == "/api/voices/all":
+            # The unified catalogue: every provider's voices, each row
+            # saying which provider owns it. Offline-safe.
+            try:
+                return self._json({"ok": True,
+                                   "voices": tts.list_all_voices()})
+            except Exception as e:
+                return self._json({"ok": False, "error": str(e)[:300]})
+
         if path == "/api/tts/quota":
             q = urllib.parse.parse_qs(self.path.partition("?")[2])
             prov = (q.get("provider") or [""])[0]
@@ -2587,6 +2687,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 self._json({"ok": True, "voices": voiceclone.list_clones(_ai33_key()),
                             "credits": voiceclone.CLONE_CREDITS,
+                            "providers": voiceclone.clone_provider_status(_ai33_key()),
                             "allowed": bool(plan_limits().get("clone_voice", True))})
             except voiceclone.CloneError as exc:
                 self._json({"ok": False, "error": str(exc), "voices": []})
@@ -2793,22 +2894,32 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     key = _ai33_key()
                     if path.endswith("/delete"):
-                        voiceclone.delete_clone(key, body.get("voice_id"))
+                        voiceclone.delete_clone_any(body.get("voice_id"),
+                                                    ai33_key=key)
                         _VOICES["at"] = 0.0           # the narrator list refreshes on the next poll
                         return self._json({"ok": True})
                     if not plan_limits().get("clone_voice", True):
                         return self._json({"ok": False, "error": "Voice cloning is switched off."})
                     if not body.get("consent"):
                         return self._json({"ok": False, "error": "Please confirm you have the right to clone this voice."})
+                    # The clone engine the buyer picked in the dialog:
+                    # AI33 (default), ElevenLabs or Fish Audio — each
+                    # speaks with its own saved key.
+                    provider = (body.get("provider") or "ai33").strip()
+                    if provider not in voiceclone.CLONE_PROVIDERS:
+                        provider = "ai33"
                     name = voiceclone.clean_name(body.get("name"))
                     try:
                         raw = base64.b64decode(str(body.get("audio") or "").split(",", 1)[-1], validate=False)
                     except Exception:
                         raw = b""
                     sample, secs, notes = voiceclone.prepare_sample(raw, body.get("filename") or "sample")
-                    voice_id = voiceclone.create_clone(key, name, sample)
+                    raw_id = voiceclone.create_clone_any(provider, name,
+                                                         sample, ai33_key=key)
                     _VOICES["at"] = 0.0               # the new clone joins the narrator list
-                    return self._json({"ok": True, "voice_id": voice_id, "name": name,
+                    return self._json({"ok": True,
+                                       "voice_id": tts.selection_token(provider, raw_id),
+                                       "provider": provider, "name": name,
                                        "seconds": secs, "notes": notes})
                 except voiceclone.CloneError as exc:
                     return self._json({"ok": False, "error": str(exc)})
@@ -3108,6 +3219,11 @@ class Handler(BaseHTTPRequestHandler):
                     if _target:
                         argv.extend(["--speed", str(_speed), "--target", str(_target)])
                 
+                if proj_name and voice:
+                    try:
+                        save_settings(proj_name, {"voice": voice})
+                    except Exception:
+                        pass
                 ok, note = JOB.start("production", argv, cwd=ROOT_DIR)
                 if ok and proj_name:
                     Handler.project = proj_name
@@ -3153,6 +3269,12 @@ class Handler(BaseHTTPRequestHandler):
                         with open(dst_script, "w", encoding="utf-8") as df:
                             df.write(sf.read())
 
+                # The pick (provider included) is the project's voice
+                # from now on, not just this run's.
+                try:
+                    save_settings(proj_name, {"voice": voice})
+                except Exception:
+                    pass
                 argv = [sys.executable, env.script("vidgen/pipeline.py"), "voice", proj_name, "--voice", voice, "--force"]
                 ok, note = JOB.start("voice", argv, cwd=HERE)
                 return self._json({"ok": ok, "note": note, "cmd": " ".join(argv), "project": proj_name}, 200 if ok else 409)

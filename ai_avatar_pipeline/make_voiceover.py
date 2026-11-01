@@ -116,6 +116,21 @@ async def speak_edge(text, out_path, cfg):
     )
     await tts.save(out_path)
 
+def speak_tts(text, out_path, provider, voice_id):
+    """One line through any Voice-panel provider (vidgen/tts.py).
+
+    The vidgen folder is found from this file's own location — the
+    bundled Python's isolated sys.path ignores PYTHONPATH, so nothing
+    here may rely on it. Keys come from the app's own key store, the
+    same one the dashboard's Voice panel saves into.
+    """
+    vidgen = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "vidgen")
+    if os.path.isdir(vidgen) and vidgen not in sys.path:
+        sys.path.insert(0, vidgen)
+    import tts
+    tts.generate_to_file(provider, voice_id, text, out_path)
+
 
 
 def _voice_settings(settings, speed):
@@ -289,11 +304,16 @@ def main():
     ap.add_argument("--cushion", type=float, default=DIALOGUE_CUSHION_SEC,
                     help="Seconds to wait before narrating on scenes that have dialogue")
     ap.add_argument("--force", action="store_true", help="Regenerate audio that already exists")
-    ap.add_argument("--engine", choices=["ai33", "edge"], default="ai33",
-                    help="ai33 = ElevenLabs Hindi narrators (~73 credits/line). edge = free, 2 voices.")
+    ap.add_argument("--engine", choices=["ai33", "edge", "tts"], default="ai33",
+                    help="ai33 = ElevenLabs Hindi narrators (~73 credits/line). edge = free, 2 voices. "
+                         "tts = any Voice-panel provider (needs --provider and --voice).")
+    ap.add_argument("--provider", default=None,
+                    help="With --engine tts: the provider id (edge, sarvam, google, azure, "
+                         "polly, openai, elevenlabs, cartesia, deepgram, fish, kokoro).")
     ap.add_argument("--api-key", default=os.environ.get("AI33_API_KEY"))
     ap.add_argument("--voice", default=None,
-                    help=f"ai33 narrator: {', '.join(AI33_NARRATORS)} — or a full provider-prefixed voice_id")
+                    help=f"ai33 narrator: {', '.join(AI33_NARRATORS)} — or a full provider-prefixed voice_id; "
+                         "with --engine tts, that provider's voice id")
     ap.add_argument("--tts-model", default=DEFAULT_AI33_MODEL)
     ap.add_argument("--speed", type=float, default=1.0,
                     help="Narration pace. 1.0 normal, 1.27 gaming-commentary fast.")
@@ -320,6 +340,14 @@ def main():
     voice_dir = os.path.join(out_dir, "narration")
     os.makedirs(voice_dir, exist_ok=True)
 
+    tts_voice = None
+    if args.engine == "tts":
+        if not args.provider:
+            sys.exit("--engine tts needs --provider <id> (edge, sarvam, google, ...)")
+        tts_voice = args.voice or narrator.get("voice")
+        if not tts_voice:
+            sys.exit("--engine tts needs --voice <that provider's voice id>")
+
     ai33_voice = None
     if args.engine == "ai33":
         if not args.api_key:
@@ -336,6 +364,8 @@ def main():
 
     if args.engine == "ai33":
         log(f"engine: ai33 ({args.tts_model}), voice {ai33_voice}")
+    elif args.engine == "tts":
+        log(f"engine: tts ({args.provider}), voice {tts_voice}")
     else:
         log(f"engine: edge-tts, voice {narrator.get('voice')} "
             f"{narrator.get('pitch','')} {narrator.get('rate','')}")
@@ -371,6 +401,8 @@ def main():
                         credits += speak_ai33(text, mp3, args.api_key, ai33_voice,
                                               args.tts_model, settings=cfg or None,
                                               speed=args.speed) or 0
+                    elif args.engine == "tts":
+                        speak_tts(text, mp3, args.provider, tts_voice)
                     else:
                         asyncio.run(speak_edge(text, mp3, narrator))
                     ok = True

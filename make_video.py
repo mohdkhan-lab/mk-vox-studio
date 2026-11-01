@@ -286,8 +286,13 @@ def _voice_refresh_reason(pdir, script_path, voice, speed):
 
     requested = (voice or "").strip()
     saved_voice = (state.get("voice_id") or "").strip()
-    if saved_voice and requested.startswith(("clone_", "elevenlabs_", "minimax_")) \
-            and requested != saved_voice:
+    # A unified-picker selection ("tts:<provider>:<voice_id>") is compared
+    # by the voice id it names — the state file records the plain id.
+    requested_id = requested
+    if requested.startswith("tts:"):
+        requested_id = requested.split(":", 2)[2] if requested.count(":") >= 2 else requested
+    if saved_voice and requested.startswith(("clone_", "elevenlabs_", "minimax_", "tts:")) \
+            and requested_id != saved_voice:
         return "the selected voice changed"
     saved_speed = state.get("speed")
     if saved_speed is not None and abs(float(saved_speed) - float(speed or 1.0)) > 0.005:

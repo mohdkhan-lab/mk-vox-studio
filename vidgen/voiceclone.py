@@ -1,6 +1,9 @@
-"""Voice cloning through AI33 (the same account the narration already uses).
+"""Voice cloning — AI33, ElevenLabs or Fish Audio, each with its own key.
 
-A 3-30 second sample in -> a `clone_...` voice that joins the narrator list.
+A 3-30 second sample in -> a cloned voice on the chosen engine that
+joins the narrator list (My Clones) and can narrate any video. The
+registry remembers which provider owns each clone. Providers without
+a clone API (Google, Azure, Edge, ...) are not offered here at all.
 
 AI33's documented v3 API:
     POST   /v3/text-to-speech/voice-clone          voice_name, audio_file (<=10MB)
@@ -122,6 +125,16 @@ def _err(resp, action):
     return CloneError(f"AI33 could not {action}: {msg or 'HTTP ' + str(resp.status_code)}")
 
 
+def _keep_sample(name, vid, sample_path):
+    """Keep the cleaned sample so the voice can be re-cloned later."""
+    try:
+        safe = re.sub(r"[^\w-]+", "_", name)
+        keep = os.path.join(_samples_dir(), f"{safe}_{str(vid)[-8:]}.mp3")
+        shutil.copyfile(sample_path, keep)
+    except Exception:
+        pass
+
+
 def create_clone(api_key, name, sample_path):
     """Send the sample to AI33. Returns the voice id to narrate with (clone_...)."""
     if not api_key:
@@ -146,17 +159,140 @@ def create_clone(api_key, name, sample_path):
         raise CloneError("AI33 accepted the sample but returned no voice id.")
     voice_id = vid if vid.startswith("clone_") else "clone_" + vid
     try:
-        _remember(voice_id, name, round(_duration(sample_path), 1))
+        _remember(voice_id, name, round(_duration(sample_path), 1), "ai33")
     except Exception:
         pass
-    # Keep the cleaned sample so the voice can be re-cloned later if needed.
-    try:
-        safe = re.sub(r"[^\w-]+", "_", name)
-        keep = os.path.join(_samples_dir(), f"{safe}_{vid[-8:]}.mp3")
-        shutil.copyfile(sample_path, keep)
-    except Exception:
-        pass
+    _keep_sample(name, vid, sample_path)
     return voice_id
+
+
+def _err_provider(resp, who, action):
+    try:
+        body = resp.json()
+        msg = ""
+        if isinstance(body, dict):
+            detail = body.get("detail")
+            msg = (detail.get("message") if isinstance(detail, dict) else "") \
+                or body.get("message") or body.get("error") or ""
+            if not isinstance(msg, str):
+                import json as _json
+                msg = _json.dumps(msg)
+    except Exception:
+        msg = resp.text[:200]
+    if resp.status_code in (401, 403):
+        return CloneError(f"{who} refused the API key. Check it under API Keys.")
+    return CloneError(f"{who} could not {action}: {msg or 'HTTP ' + str(resp.status_code)}")
+
+
+def create_clone_elevenlabs(api_key, name, sample_path):
+    """Clone through the buyer's own ElevenLabs account.
+
+    POST /v1/voices/add (name + sample files) — the same one-shot shape
+    as AI33's clone call. Returns the voice_id, usable at once.
+    """
+    if not api_key:
+        raise CloneError("No ElevenLabs key yet - add it under API Keys "
+                         "(Voice provider keys) first.")
+    with open(sample_path, "rb") as f:
+        resp = requests.post(
+            "https://api.elevenlabs.io/v1/voices/add",
+            headers={"xi-api-key": api_key},
+            data={"name": name,
+                  "description": "Cloned in MK Vox Studio"},
+            files={"files": (re.sub(r"\W+", "_", name) + ".mp3", f,
+                             "audio/mpeg")},
+            timeout=300)
+    if resp.status_code >= 400:
+        raise _err_provider(resp, "ElevenLabs", "clone this voice")
+    try:
+        body = resp.json()
+    except ValueError:
+        raise CloneError("ElevenLabs answered with something that is not JSON.")
+    vid = str(body.get("voice_id") or "").strip()
+    if not vid:
+        raise CloneError("ElevenLabs accepted the sample but returned no voice id.")
+    try:
+        _remember(vid, name, round(_duration(sample_path), 1), "elevenlabs")
+    except Exception:
+        pass
+    _keep_sample(name, vid, sample_path)
+    return vid
+
+
+def create_clone_fish(api_key, name, sample_path):
+    """Clone through the buyer's own Fish Audio account.
+
+    POST /model (title + type=tts + the sample) creates a voice model;
+    its id is the reference_id the Fish TTS call speaks with. Fish
+    trains the model on their side after this returns.
+    """
+    if not api_key:
+        raise CloneError("No Fish Audio key yet - add it under API Keys "
+                         "(Voice provider keys) first.")
+    with open(sample_path, "rb") as f:
+        resp = requests.post(
+            "https://api.fish.audio/model",
+            headers={"Authorization": "Bearer " + api_key},
+            data={"title": name, "type": "tts", "visibility": "private"},
+            files={"voices": (re.sub(r"\W+", "_", name) + ".mp3", f,
+                              "audio/mpeg")},
+            timeout=300)
+    if resp.status_code >= 400:
+        raise _err_provider(resp, "Fish Audio", "clone this voice")
+    try:
+        body = resp.json()
+    except ValueError:
+        raise CloneError("Fish Audio answered with something that is not JSON.")
+    vid = str(body.get("_id") or body.get("id") or "").strip()
+    if not vid:
+        raise CloneError("Fish Audio accepted the sample but returned no model id.")
+    try:
+        _remember(vid, name, round(_duration(sample_path), 1), "fish")
+    except Exception:
+        pass
+    _keep_sample(name, vid, sample_path)
+    return vid
+
+
+def _tts_key(provider):
+    """A provider key from the Voice panel's store (tts.py, same folder)."""
+    try:
+        import tts
+        return tts.get_key(provider)
+    except Exception:
+        return ""
+
+
+# Which engines can clone at all. Every other provider in the app has
+# no clone API the buyer could use with a pasted key — they are not
+# offered in the clone dialog rather than faked.
+CLONE_PROVIDERS = ("ai33", "elevenlabs", "fish")
+
+
+def create_clone_any(provider, name, sample_path, ai33_key=""):
+    """Clone on the chosen engine. Returns the raw voice id."""
+    provider = provider if provider in CLONE_PROVIDERS else "ai33"
+    if provider == "ai33":
+        return create_clone(ai33_key, name, sample_path)
+    if provider == "elevenlabs":
+        return create_clone_elevenlabs(_tts_key("elevenlabs"),
+                                       name, sample_path)
+    return create_clone_fish(_tts_key("fish"), name, sample_path)
+
+
+def clone_provider_status(ai33_key=""):
+    """Per-engine readiness for the clone dialog (key saved or not)."""
+    return [
+        {"id": "ai33", "name": "AI33",
+         "ready": bool(ai33_key),
+         "note": "333 AI33 credits per clone"},
+        {"id": "elevenlabs", "name": "ElevenLabs",
+         "ready": bool(_tts_key("elevenlabs")),
+         "note": "Uses your ElevenLabs key — counts against your plan's voice slots"},
+        {"id": "fish", "name": "Fish Audio",
+         "ready": bool(_tts_key("fish")),
+         "note": "Uses your Fish Audio key — model trains on your Fish plan"},
+    ]
 
 
 # AI33's `provider=clone` listing is not only this buyer's voices (it returns a
@@ -186,18 +322,36 @@ def _save_registry(items):
     os.replace(tmp, path)
 
 
-def _remember(voice_id, name, seconds=0):
+def _remember(voice_id, name, seconds=0, provider="ai33"):
     import time
     items = [v for v in my_clones() if v["id"] != voice_id]
     items.insert(0, {"id": voice_id, "name": name, "seconds": seconds,
+                     "provider": provider,
                      "created": time.strftime("%Y-%m-%d %H:%M")})
     _save_registry(items)
 
 
+def _selection_id(provider, voice_id):
+    """The narrator picker's value for a clone (see tts.selection_token)."""
+    if provider == "ai33":
+        return voice_id
+    return "tts:%s:%s" % (provider, voice_id)
+
+
 def list_clones(api_key=None):
-    """The voices cloned from this app, newest first."""
-    return [{"id": v["id"], "name": v.get("name") or v["id"], "preview": "",
-             "created": v.get("created", "")} for v in my_clones()]
+    """The voices cloned from this app, newest first.
+
+    `id` is the narrator picker's selection value (provider included),
+    `voice_id` the provider's own raw id.
+    """
+    out = []
+    for v in my_clones():
+        prov = v.get("provider") or "ai33"
+        out.append({"id": _selection_id(prov, v["id"]), "voice_id": v["id"],
+                    "provider": prov,
+                    "name": v.get("name") or v["id"], "preview": "",
+                    "created": v.get("created", "")})
+    return out
 
 
 def delete_clone(api_key, voice_id):
@@ -208,5 +362,38 @@ def delete_clone(api_key, voice_id):
                            headers={"xi-api-key": api_key}, timeout=60)
     if resp.status_code >= 400 and resp.status_code != 404:
         raise _err(resp, "delete this voice")
+    _save_registry([v for v in my_clones() if v["id"] != raw])
+    return True
+
+
+def delete_clone_any(selection, ai33_key=""):
+    """Delete a clone given its picker selection value (or raw id)."""
+    sel = str(selection or "")
+    provider, raw = "ai33", sel
+    if sel.startswith("tts:"):
+        prov, _, vid = sel[4:].partition(":")
+        if prov and vid:
+            provider, raw = prov, vid
+    entry = next((v for v in my_clones() if v["id"] == raw), None)
+    if entry is None:
+        raise CloneError("Only voices you cloned in this app can be deleted here.")
+    provider = entry.get("provider") or provider
+    if provider == "ai33":
+        return delete_clone(ai33_key, raw)
+    if provider == "elevenlabs":
+        resp = requests.delete(
+            "https://api.elevenlabs.io/v1/voices/%s" % raw,
+            headers={"xi-api-key": _tts_key("elevenlabs")}, timeout=60)
+        if resp.status_code >= 400 and resp.status_code != 404:
+            raise _err_provider(resp, "ElevenLabs", "delete this voice")
+    elif provider == "fish":
+        resp = requests.delete(
+            "https://api.fish.audio/model/%s" % raw,
+            headers={"Authorization": "Bearer " + _tts_key("fish")},
+            timeout=60)
+        if resp.status_code >= 400 and resp.status_code != 404:
+            raise _err_provider(resp, "Fish Audio", "delete this voice")
+    else:
+        raise CloneError("This clone's provider cannot delete voices here.")
     _save_registry([v for v in my_clones() if v["id"] != raw])
     return True

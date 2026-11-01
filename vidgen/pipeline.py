@@ -69,6 +69,20 @@ def do_voice(args):
         engine = _tts.get_voiceover_provider()
     except Exception:
         engine = "ai33"
+    # A narrator picked on the project page carries its provider with
+    # it ("tts:<provider>:<voice_id>" — see tts.parse_selection). That
+    # per-project pick wins over the global API Keys engine; a plain
+    # voice id is an AI33 voice, exactly as before.
+    voice_arg = args.voice
+    try:
+        import tts as _tts
+        _prov, _vid = _tts.parse_selection((args.voice or "").strip())
+        if _prov != "ai33":
+            engine, voice_arg = _prov, _vid
+            log("voice", "Project ki chuni hui awaaz: %s (%s)"
+                         % (_vid, _prov))
+    except Exception:
+        pass
     key = ai33_key(args.key) or ""
     if engine == "ai33" and not key:
         # Never fail quietly on a missing AI33 key: say so in the log
@@ -83,7 +97,7 @@ def do_voice(args):
     if not os.path.isfile(script):
         sys.exit(f"{script} is missing — write the narration first")
     try:
-        voice.generate(args.id, script, args.voice, key, speed=args.speed,
+        voice.generate(args.id, script, voice_arg, key, speed=args.speed,
                        force=args.force, target=args.target, engine=engine)
     except Exception as exc:
         if engine == "edge":
@@ -96,7 +110,7 @@ def do_voice(args):
         log("voice", "FALLBACK: %s se voiceover nahi bana (%s) — "
                      "voiceover FREE Edge TTS se ban raha hai."
                      % (engine, str(exc)[:200]))
-        voice.generate(args.id, script, args.voice, key, speed=args.speed,
+        voice.generate(args.id, script, voice_arg, key, speed=args.speed,
                        force=True, target=args.target, engine="edge")
 
 

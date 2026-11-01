@@ -2712,10 +2712,21 @@ html #productionSettingsTab .settings-shell > .card-panel > #captionGroup,
               <button type="button" class="v-tab" data-vfilter="elevenlabs">ElevenLabs</button>
               <button type="button" class="v-tab" data-vfilter="minimax">Minimax</button>
               <button type="button" class="v-tab" data-vfilter="english">English</button>
+              <button type="button" class="v-tab" data-vfilter="provider:edge">Edge Free</button>
+              <button type="button" class="v-tab" data-vfilter="provider:google">Google</button>
+              <button type="button" class="v-tab" data-vfilter="provider:azure">Azure</button>
+              <button type="button" class="v-tab" data-vfilter="provider:polly">Polly</button>
+              <button type="button" class="v-tab" data-vfilter="provider:sarvam">Sarvam</button>
+              <button type="button" class="v-tab" data-vfilter="provider:openai">OpenAI</button>
+              <button type="button" class="v-tab" data-vfilter="provider:elevenlabs">ElevenLabs (Direct)</button>
+              <button type="button" class="v-tab" data-vfilter="provider:cartesia">Cartesia</button>
+              <button type="button" class="v-tab" data-vfilter="provider:deepgram">Deepgram</button>
+              <button type="button" class="v-tab" data-vfilter="provider:fish">Fish</button>
+              <button type="button" class="v-tab" data-vfilter="provider:kokoro">Kokoro</button>
             </div>
 
             <select id="voiceSelect">
-              <option value="">— loading 100+ voices from AI33 Pro —</option>
+              <option value="">— loading voices —</option>
             </select>
             <div class="voice-tools">
               <button type="button" class="vb-btn" data-vplay="voiceSelect" title="Play a sample of the chosen voice"><svg class="ms-ico" viewBox="0 0 24 24" style="width:12px;height:12px;"><path d="M7 4.5v15l12.5-7.5z" fill="currentColor"/></svg> Play</button>
@@ -3952,6 +3963,16 @@ html #productionSettingsTab .settings-shell > .card-panel > #captionGroup,
         <div class="input-group">
           <label class="input-label" for="vcName">Voice name</label>
           <input type="text" id="vcName" maxlength="60" placeholder="e.g. My Story Voice, Rahul Narrator">
+        </div>
+
+        <div class="input-group">
+          <label class="input-label" for="vcProvider">Clone engine</label>
+          <select id="vcProvider">
+            <option value="ai33">AI33 — uses AI33 credits (333 per clone)</option>
+            <option value="elevenlabs">ElevenLabs — your own key (API Keys panel)</option>
+            <option value="fish">Fish Audio — your own key (API Keys panel)</option>
+          </select>
+          <div class="vc-hint" id="vcProviderHint">Cloning happens on the engine you pick; the clone then appears in My Clones and can narrate any video.</div>
         </div>
 
         <div class="vc-tabs" id="vcTabs">
@@ -5293,10 +5314,13 @@ html #productionSettingsTab .settings-shell > .card-panel > #captionGroup,
 
     const filtered = _allVoicesList.filter(v => {
       if (_currentVoiceFilter === "all") return true;
+      if (_currentVoiceFilter.indexOf("provider:") === 0) return (v.provider || "") === _currentVoiceFilter.slice(9);
       if (_currentVoiceFilter === "hindi") return v.lang === "hindi" || (v.group && v.group.includes("Hindi"));
       if (_currentVoiceFilter === "clone") return v.lang === "clone" || (v.group && v.group.includes("Cloned"));
-      if (_currentVoiceFilter === "elevenlabs") return v.lang === "elevenlabs" || (v.group && v.group.includes("ElevenLabs"));
-      if (_currentVoiceFilter === "minimax") return v.lang === "minimax" || (v.group && v.group.includes("Minimax"));
+      // The ElevenLabs/Minimax chips mean AI33's own engines — a voice
+      // whose provider is set and not AI33 belongs to its provider chip.
+      if (_currentVoiceFilter === "elevenlabs") return (!v.provider || v.provider === "ai33") && (v.lang === "elevenlabs" || (v.group && v.group.includes("ElevenLabs")));
+      if (_currentVoiceFilter === "minimax") return (!v.provider || v.provider === "ai33") && (v.lang === "minimax" || (v.group && v.group.includes("Minimax")));
       if (_currentVoiceFilter === "favorite") return v.lang === "favorite";
       if (_currentVoiceFilter === "english") return v.lang === "english" || (v.group && v.group.includes("English"));
       return true;
@@ -8643,14 +8667,18 @@ html #productionSettingsTab .settings-shell > .card-panel > #captionGroup,
     if (!sample) { status("Add a sample: upload a file or record one.", "err"); return; }
     if (!$("vcConsent").checked) { status("Please confirm you have the right to clone this voice.", "err"); return; }
     if (sample.size > 25 * 1024 * 1024) { status("That file is over 25 MB - use a shorter sample.", "err"); return; }
-    const ok = await confirmBox(`Clone "${name}" now?\n\nThis uses 333 AI33 credits.`, { title: "Clone voice", yesText: "Clone" });
+    const provider = ($("vcProvider") && $("vcProvider").value) || "ai33";
+    const confirmMsg = provider === "ai33"
+      ? `Clone "${name}" now?\n\nThis uses 333 AI33 credits.`
+      : `Clone "${name}" now?\n\nIt will be made on your ${provider === "elevenlabs" ? "ElevenLabs" : "Fish Audio"} account, with your own saved key.`;
+    const ok = await confirmBox(confirmMsg, { title: "Clone voice", yesText: "Clone" });
     if (!ok) return;
     busy = true; $("vcGo").disabled = true;
     status("Cleaning the sample and cloning the voice... this usually takes under a minute.", "busy");
     try {
       const audio = await toBase64(sample);
       const r = await fetch("/api/voice_clone", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, audio, filename: sampleName, consent: true }) });
+        body: JSON.stringify({ name, audio, filename: sampleName, consent: true, provider }) });
       const j = await r.json();
       if (!j || !j.ok) { status((j && j.error) || "Cloning failed.", "err"); return; }
       const extra = (j.notes && j.notes.length) ? " " + j.notes.join(" ") : "";
@@ -8674,18 +8702,34 @@ html #productionSettingsTab .settings-shell > .card-panel > #captionGroup,
     let j;
     try { j = await (await fetch("/api/voice_clone/list", { cache: "no-store" })).json(); }
     catch (e) { box.innerHTML = '<div class="vc-hint">Could not load your cloned voices.</div>'; return; }
-    if (j && j.credits) $("vcCost").textContent = `Uses ${j.credits} AI33 credits per clone.`;
+    if (j && j.providers) _cloneProviders = j.providers;
+    vcUpdateCost();
     if (j && j.allowed === false) { $("vcGo").disabled = true; status("Voice cloning is switched off.", "err"); }
     const list = (j && j.voices) || [];
     if (!list.length) { box.innerHTML = '<div class="vc-hint">' + esc((j && j.error) || "No cloned voices yet - your first one will appear here.") + '</div>'; return; }
     box.innerHTML = list.map(v => `
       <div class="vc-row" data-id="${esc(v.id)}">
-        <div class="vc-row-name">${esc(v.name)} <span class="vc-row-id">${esc(v.id)}</span></div>
+        <div class="vc-row-name">${esc(v.name)} <span class="vc-row-id">${esc(v.voice_id || v.id)}</span> <span class="vc-row-id">${esc(CLONE_PROVIDER_NAMES[v.provider] || v.provider || "AI33")}</span></div>
         ${v.preview ? `<button type="button" class="btn-secondary" data-vc-play="${esc(v.preview)}">Play</button>` : ""}
         <button type="button" class="btn-secondary" data-vc-use="${esc(v.id)}">Use</button>
         <button type="button" class="btn-secondary" data-vc-del="${esc(v.id)}" data-vc-name="${esc(v.name)}" style="color: var(--red);">Delete</button>
       </div>`).join("");
   }
+
+  const CLONE_PROVIDER_NAMES = { ai33: "AI33", elevenlabs: "ElevenLabs", fish: "Fish Audio" };
+  let _cloneProviders = [];
+  function vcUpdateCost() {
+    const sel = $("vcProvider");
+    const provider = (sel && sel.value) || "ai33";
+    const info = _cloneProviders.find(p => p.id === provider);
+    let msg;
+    if (provider === "ai33") msg = "Uses 333 AI33 credits per clone.";
+    else if (provider === "elevenlabs") msg = "Uses your ElevenLabs key - no AI33 credits. Counts against your plan's voice slots.";
+    else msg = "Uses your Fish Audio key - no AI33 credits. The model trains on your Fish plan.";
+    if (info && !info.ready) msg += " ⚠ No key saved yet - add it in API Keys (top right).";
+    $("vcCost").textContent = msg;
+  }
+  if ($("vcProvider")) $("vcProvider").addEventListener("change", vcUpdateCost);
 
   $("vcList").addEventListener("click", async (e) => {
     const play = e.target.closest("[data-vc-play]"), use = e.target.closest("[data-vc-use]"), del = e.target.closest("[data-vc-del]");
@@ -8697,7 +8741,7 @@ html #productionSettingsTab .settings-shell > .card-panel > #captionGroup,
       selectWhenListed(use.dataset.vcUse);
       status("Selected - it is now the narrator for this video.", "ok");
     } else if (del) {
-      const ok = await confirmBox(`Delete the cloned voice "${del.dataset.vcName}" from your AI33 account?\n\nVideos already made are not affected.`, { title: "Delete cloned voice", yesText: "Delete" });
+      const ok = await confirmBox(`Delete the cloned voice "${del.dataset.vcName}"?\n\nVideos already made are not affected.`, { title: "Delete cloned voice", yesText: "Delete" });
       if (!ok) return;
       del.disabled = true;
       try {
