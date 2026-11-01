@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.log
+.server_session.json
+my_cloned_voices.json
+ai_avatar_pipeline/browser_profiles/
+vidgen/projects/
+*.tmp
+temp_update/
+dist/
+*.zip
+*.exe
+!Mk-Tool.exe
+
+
+# CI build payload (GitHub Actions assembles it in the runner)
+payload/
+tts_keys.json
+tts_outputs/
